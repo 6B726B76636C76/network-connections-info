@@ -1,0 +1,6 @@
+#for example
+data:
+  db_path: /home/vaclav/Database/Databases
+  logs_output_path: /home/vaclav
+  loki:
+  

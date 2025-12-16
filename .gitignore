@@ -1,1 +1,7 @@
 /venv
+/logs_data_example
+/logs
+imports
+output.txt
+.idea
+.todo

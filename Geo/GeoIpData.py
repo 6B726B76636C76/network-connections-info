@@ -1,60 +1,67 @@
-from Geo.GeoModel import GeoData
+import asyncio
+import geoip2.errors
 import geoip2.database
+from Geo.GeoModel import GeoData
 from Logger.logger import logger
 
-DB_PATH = './Database/Databases/GeoLite2-City.mmdb'
-AVAILABLE_LANGUAGES = ['de', 'en', 'es', 'fr', 'ja', 'pt-BR', 'ru', 'zh-CN']
+language = "en"
 reader: geoip2.database.Reader | None = None
 
-try:
-    reader = geoip2.database.Reader(DB_PATH)
-    meta = reader.metadata()
-    logger.info(
-        f"GeoIP database loaded: {DB_PATH} | "
-        f"{meta.database_type} | "
-        f"Build: {meta.build_epoch} | "
-        f"Languages: {', '.join(meta.languages)}"
-    )
-except Exception as e:
-    logger.error(f"Failed to load GeoIP database: {e}")
-    raise
+def init_reader(db_path: str) -> geoip2.database.Reader | None :
     
-
-async def get_ip_data(ip: str, language: str) -> GeoData | None:
-    
-    language = language if language in AVAILABLE_LANGUAGES else "en"
-    if reader is None:
-        logger.error("GeoIP reader is not initialized!")
-        return None
+    global reader
+    if reader is not None:
+        return
 
     try:
-        response = reader.city(ip)
+        reader = geoip2.database.Reader(f"{db_path}/GeoLite2-City.mmdb")
+        meta = reader.metadata()
         
-        city = response.city.names.get(language, "Undefined city") if response.city.names else "Undefined city"
-        country = response.country.names.get(language, "Undefined country") if response.country.names else "Undefined country"
-        continent = response.continent.names.get(language, "Undefined continent") if response.continent.names else "Undefined continent"
-        lt = response.location.latitude
-        ln = response.location.longitude
-        network = str(response.traits.network) if response.traits.network else None
-        
-        logger.debug(f"GeoIP success: {ip} → {city}, {country}")        
-        return GeoData (
-                ip,
-                network,
-                city,
-                country,
-                continent,
-                lt,
-                ln
+        logger.info(
+            f"GeoIP database loaded: {db_path} | "
+            f"{meta.database_type} | "
+            f"Build: {meta.build_epoch} | "
         )
-    except geoip2.errors.AddressNotFoundError:
-        logger.debug(f"IP {ip} not found in GeoLite2 database")
-        return None
+        return reader
+    
     except Exception as e:
+        
+        logger.critical(f"Failed to load GeoIP database: {e}")
+        raise RuntimeError("Cannot initialize GeoIP reader") from e
+
+async def get_ip_data_by_db(ip: str, db_path: str) -> GeoData:
+    
+    if ip == "192.168.0.1":
+        return GeoData(ip=ip, network=None, city=None, country=None)
+
+    if reader is None:
+        init_reader(db_path)
+
+    loop = asyncio.get_running_loop()
+
+    try:
+        response = await loop.run_in_executor(None, lambda: reader.city(ip))
+        city = response.city.names.get(language) if response.city.names else None
+        country = response.country.names.get(language) if response.country.names else None
+        network = str(response.traits.network) if response.traits.network else None
+
+        if not city and not country:
+            logger.debug(f"GeoIP lookup: {ip} has no city or country info")
+        else:
+            logger.debug(f"GeoIP success: {ip} → {city}, {country}")
+
+        return GeoData(ip=ip, network=network, city=city, country=country)
+
+    except geoip2.errors.AddressNotFoundError as e:
+        
+        logger.debug(f"IP {ip} not found in GeoLite2 database. {e}")
+        return GeoData(ip=ip, network=None, city=None, country=None)
+
+    except Exception as e:
+        
         logger.error(f"GeoIP lookup error for {ip}: {e}")
-        return None
-    
-    
+        return GeoData(ip=ip, network=None, city=None, country=None)
+
 def close_geoip_reader() -> None:
     global reader
     if reader is not None:
